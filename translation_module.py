@@ -10,6 +10,8 @@ from threading import Lock
 import time
 import threading
 from collections import OrderedDict
+import sys
+import os
 
 # 尝试使用更快的JSON库
 try:
@@ -32,6 +34,20 @@ except ImportError:
 
     use_httpx = False
     print("使用标准requests库")
+
+# 支持的语言代码
+LANGUAGE_CODES = {
+    "中文": "cn",
+    "英语": "en",
+    "日语": "ja",
+    "印尼语": "id",
+    "越南语": "vi",
+    "泰语": "th",
+    "西班牙语": "es"
+}
+
+# 语言代码反向映射（用于显示）
+LANGUAGE_NAMES = {code: name for name, code in LANGUAGE_CODES.items()}
 
 
 class LRUCache:
@@ -192,7 +208,7 @@ class TranslationModule:
         }
 
         # 添加术语资源
-        if use_terminology:
+        if use_terminology and (from_lang == "cn" and to_lang == "en" or from_lang == "en" and to_lang == "cn"):
             body["header"]["res_id"] = self.res_id
 
         return body
@@ -295,8 +311,8 @@ class TranslationModule:
 
         参数:
             text: 待翻译文本
-            from_lang: 源语言（cn：中文，en：英文）
-            to_lang: 目标语言（cn：中文，en：英文）
+            from_lang: 源语言（cn：中文，en：英文等）
+            to_lang: 目标语言（cn：中文，en：英文等）
             use_terminology: 是否使用术语资源
             use_cache: 是否使用缓存
 
@@ -310,6 +326,12 @@ class TranslationModule:
         # 源语言与目标语言相同，直接返回原文
         if from_lang == to_lang:
             return text
+
+        # 检查语言支持
+        if from_lang not in [code for code in LANGUAGE_CODES.values()]:
+            raise ValueError(f"不支持的源语言代码: {from_lang}")
+        if to_lang not in [code for code in LANGUAGE_CODES.values()]:
+            raise ValueError(f"不支持的目标语言代码: {to_lang}")
 
         # 生成缓存键
         if use_cache:
@@ -372,69 +394,151 @@ class TranslationModule:
             pass
 
 
-# 使用示例
-if __name__ == "__main__":
-    # 你的API密钥（这里使用文档中的示例密钥）
+def detect_language(text):
+    """
+    简单的语言检测函数，根据文本特征推测语言
+
+    参数:
+        text: 要检测的文本
+
+    返回:
+        检测到的语言代码
+    """
+    # 计算不同字符集的字符出现频率
+    char_counts = {
+        'cn': 0,  # 中文
+        'en': 0,  # 英文
+        'ja': 0,  # 日文（假设日文包含汉字）
+        'es': 0,  # 西班牙文
+        'other': 0  # 其他语言
+    }
+
+    # 简单的语言检测逻辑
+    for char in text:
+        if '\u4e00' <= char <= '\u9fff':
+            # 汉字范围 (中文/日文)
+            char_counts['cn'] += 1
+        elif ('a' <= char.lower() <= 'z') or char in "''":
+            # 英文字母
+            char_counts['en'] += 1
+        elif '\u3040' <= char <= '\u30ff':
+            # 日文平假名和片假名
+            char_counts['ja'] += 1
+        elif char in 'áéíóúüñ¿¡':
+            # 西班牙文特殊字符
+            char_counts['es'] += 1
+        elif char.isalpha():
+            # 其他字母
+            char_counts['other'] += 1
+
+    # 确定主要语言
+    if char_counts['ja'] > 0:
+        return 'ja'  # 有日文假名，判断为日文
+    elif char_counts['cn'] > char_counts['en'] and char_counts['cn'] > char_counts['other']:
+        return 'cn'  # 中文字符占多数
+    elif char_counts['es'] > 0 and char_counts['en'] > 0:
+        return 'es'  # 有西班牙文特殊字符
+    elif char_counts['en'] > 0:
+        return 'en'  # 英文字符占多数
+
+    # 默认返回英文
+    return 'en'
+
+
+def clear_screen():
+    """清除终端屏幕"""
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+
+def interactive_translation():
+    """交互式翻译程序"""
+    # 你的API密钥
     APP_ID = "86c79fb7"
     API_SECRET = "MDY3ZGFkYWEyZDBiOTJkOGIyOTllOWMz"
     API_KEY = "f4369644e37eddd43adfe436e7904cf1"
 
+    # 创建翻译模块实例
     translator = TranslationModule(APP_ID, API_SECRET, API_KEY)
 
-    # 测试中英互译
-    print("\n=== 翻译性能测试 ===")
+    while True:
+        clear_screen()
+        print("\n===== 多语言翻译工具 =====")
+        print("支持的语言: " + ", ".join(LANGUAGE_CODES.keys()))
+        print("------------------------")
 
-    # 测试翻译缓存效果
-    chinese_text = "测试中文转英文，这是一段用于测试翻译模块性能的文本"
+        # 1. 手动输入文本
+        print("请输入要翻译的文本 (输入'exit'退出):")
+        text = input("> ")
 
-    # 第一次翻译（无缓存）
-    start_time = time.time()
-    english_result = translator.translate(chinese_text, "cn", "en")
-    first_time = time.time() - start_time
+        if text.lower() == 'exit':
+            break
 
-    if english_result:
-        print(f"中文：{chinese_text}")
-        print(f"英文：{english_result}")
-        print(f"首次翻译用时: {first_time:.4f} 秒")
+        if not text.strip():
+            print("文本不能为空！按任意键继续...")
+            input()
+            continue
 
-        # 第二次翻译（有缓存）
+        # 自动检测输入语言
+        detected_lang = detect_language(text)
+        from_lang_name = LANGUAGE_NAMES.get(detected_lang, "未知")
+        print(f"\n检测到输入语言: {from_lang_name} ({detected_lang})")
+
+        # 2. 选择目标语言
+        print("\n选择目标语言:")
+        for i, (name, code) in enumerate(LANGUAGE_CODES.items(), 1):
+            if code != detected_lang:  # 不显示检测到的源语言
+                print(f"{i}. {name} ({code})")
+
+        target_choice = input("\n请输入目标语言的序号: ")
+        try:
+            target_idx = int(target_choice) - 1
+            if target_idx < 0 or target_idx >= len(LANGUAGE_CODES):
+                raise ValueError()
+
+            to_lang_name = list(LANGUAGE_CODES.keys())[target_idx]
+            to_lang = LANGUAGE_CODES[to_lang_name]
+
+            # 如果选择了与源语言相同的语言，提示重新选择
+            if to_lang == detected_lang:
+                print(f"目标语言与源语言相同，请重新选择！按任意键继续...")
+                input()
+                continue
+
+        except (ValueError, IndexError):
+            print("无效的选择！按任意键继续...")
+            input()
+            continue
+
+        # 3. 执行翻译
+        print(f"\n正在将 {from_lang_name} 翻译为 {to_lang_name}...")
         start_time = time.time()
-        english_result2 = translator.translate(chinese_text, "cn", "en")
-        second_time = time.time() - start_time
+        result = translator.translate(text, detected_lang, to_lang)
+        elapsed = time.time() - start_time
 
-        print(f"二次翻译用时: {second_time:.4f} 秒")
-
-        # 修复除零错误 - 添加条件判断
-        if first_time > 0 and second_time > 0:
-            print(f"缓存加速比: {first_time / second_time:.2f}x\n")
-        elif second_time == 0:
-            print(f"缓存加速比: 极高 (缓存访问时间接近于0)\n")
+        # 显示翻译结果
+        if result:
+            print("\n=== 翻译结果 ===")
+            print(f"原文 ({from_lang_name}): {text}")
+            print(f"译文 ({to_lang_name}): {result}")
+            print(f"翻译用时: {elapsed:.2f} 秒")
         else:
-            print(f"无法计算加速比\n")
+            print("\n翻译失败，请检查网络连接或API密钥。")
 
-    # 测试英文到中文
-    english_text = "This is a test for English to Chinese translation performance"
-    chinese_result = translator.translate(english_text, "en", "cn")
-    if chinese_result:
-        print(f"英文：{english_text}")
-        print(f"中文：{chinese_result}\n")
+        # 展示缓存状态
+        cache_stats = translator.get_cache_stats()
+        print(f"\n缓存状态: 已使用 {cache_stats['current_size']}/{cache_stats['capacity']}")
 
-    # 测试批量翻译
-    test_texts = [
-        "这是第一段文本",
-        "这是第二段文本",
-        "这是第三段文本"
-    ]
+        print("\n按Enter键继续，输入'exit'退出...")
+        if input().lower() == 'exit':
+            break
 
-    print("批量翻译测试:")
-    start_time = time.time()
-    results = translator.batch_translate(test_texts, "cn", "en")
-    batch_time = time.time() - start_time
 
-    for i, (src, tgt) in enumerate(zip(test_texts, results)):
-        print(f"{i + 1}. {src} -> {tgt}")
-
-    print(f"批量翻译用时: {batch_time:.4f} 秒")
-
-    # 缓存统计
-    print(f"\n缓存状态: {translator.get_cache_stats()}")
+# 主程序入口
+if __name__ == "__main__":
+    try:
+        interactive_translation()
+    except KeyboardInterrupt:
+        print("\n程序已退出。")
+    except Exception as e:
+        print(f"\n程序发生错误: {str(e)}")
+        sys.exit(1)
